@@ -1,0 +1,61 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Datasets and videos
+RWF-2000/
+data/
+datasets/
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Model weights and checkpoints
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.engine
+*.safetensors
+
+# Training outputs
+outputs/
+checkpoints/
+logs/
+metrics/
+backups/
+wandb/
+runs/
+*.log
+
+# Notebooks and generated reports
+*.ipynb
+*.csv
+*.parquet
+
+# Secrets and credentials
+.env
+.env.*
+.secrets/
+secrets/
+credentials/
+credentials.json
+.git-credentials
+*.pem
+*.key
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
