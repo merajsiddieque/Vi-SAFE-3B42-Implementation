@@ -1,56 +1,51 @@
 
-# ============================================================
-# RWF-2000 DOWNLOAD + SAFE EXTRACTION
-#
-# Download using KaggleHub only when needed.
-# Use the actual path returned by KaggleHub.
-# Support extracted directories and ZIP archives.
-# Create final dataset at /content/RWF-2000.
-#
-# Final structure:
-# /content/RWF-2000/
-# ├── train/
-# │   ├── Fight/
-# │   └── NonFight/
-# └── val/
-#     ├── Fight/
-#     └── NonFight/
-# ============================================================
+#!/usr/bin/env python3
 
-from pathlib import Path
-from zipfile import ZipFile
-import importlib.util
-import subprocess
-import sys
+"""
+RWF-2000 Dataset Preparation
+
+Expected dataset structure:
+
+/content/RWF-2000/
+    train/
+        Fight/       800 videos
+        NonFight/    800 videos
+    val/
+        Fight/       200 videos
+        NonFight/    200 videos
+
+The script:
+1. Checks whether the final dataset is already complete.
+2. Reuses the KaggleHub archive if it exists.
+3. Downloads only when the archive is missing.
+4. Extracts videos safely using sequential filenames.
+5. Verifies the final dataset.
+"""
+
+import os
 import shutil
-
-
-# ============================================================
-# 1. INSTALL KAGGLEHUB IF REQUIRED
-# ============================================================
-
-if importlib.util.find_spec("kagglehub") is None:
-    subprocess.check_call([
-        sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "-q",
-        "kagglehub"
-    ])
-
-import kagglehub
-
+import zipfile
+from pathlib import Path
+from collections import Counter
+from zipfile import ZipFile
 
 # ============================================================
-# 2. CONFIGURATION
+# 1. CONFIGURATION
 # ============================================================
 
-DATASET_ID = "vulamnguyen/rwf2000"
+REPO_DIR = Path("/content/Vi-SAFE-3B42-Implementation")
 
-OUTPUT = Path("/content/RWF-2000")
+OUTPUT_DIR = Path("/content/RWF-2000")
 
-EXPECTED_TOTAL = 2000
+TEMP_DIR = Path("/content/rwf2000_extraction")
+
+KAGGLE_CACHE_DIR = Path(
+    "/root/.cache/kagglehub/datasets/vulamnguyen/rwf2000"
+)
+
+ARCHIVE_PATH = KAGGLE_CACHE_DIR / "1.archive"
+
+DATASET_NAME = "vulamnguyen/rwf2000"
 
 VIDEO_EXTENSIONS = {
     ".avi",
@@ -59,381 +54,403 @@ VIDEO_EXTENSIONS = {
     ".mkv"
 }
 
-EXPECTED_FOLDERS = [
-    ("train", "Fight"),
-    ("train", "NonFight"),
-    ("val", "Fight"),
-    ("val", "NonFight"),
-]
+EXPECTED_COUNTS = {
+    ("train", "Fight"): 800,
+    ("train", "NonFight"): 800,
+    ("val", "Fight"): 200,
+    ("val", "NonFight"): 200,
+}
+
+TOTAL_EXPECTED = 2000
 
 
 # ============================================================
-# 3. CHECK EXISTING DATASET
+# 2. VERIFY EXISTING DATASET
 # ============================================================
 
-def dataset_is_ready(root):
-
-    total = 0
-
-    for split, category in EXPECTED_FOLDERS:
-
-        folder = root / split / category
-
-        if not folder.is_dir():
-            return False
-
-        videos = [
-            file for file in folder.iterdir()
-            if file.is_file()
-            and file.suffix.lower() in VIDEO_EXTENSIONS
-        ]
-
-        if len(videos) == 0:
-            return False
-
-        total += len(videos)
-
-    return total == EXPECTED_TOTAL
-
-
-if dataset_is_ready(OUTPUT):
-
-    print("Dataset already exists and is complete.")
-    print("Skipping download and extraction.")
-    print("Location:", OUTPUT)
-
-else:
-
-    # ========================================================
-    # 4. DOWNLOAD USING KAGGLEHUB
-    # ========================================================
-
-    print("=" * 65)
-    print("DOWNLOADING RWF-2000")
-    print("=" * 65)
-
-    print("Checking KaggleHub dataset cache...")
-
-    try:
-
-        downloaded_path = kagglehub.dataset_download(
-            DATASET_ID
-        )
-
-        downloaded_path = Path(downloaded_path)
-
-        print("\nKaggleHub returned:")
-        print(downloaded_path)
-
-    except Exception as error:
-
-        raise RuntimeError(
-            "KaggleHub dataset download failed. "
-            "Check internet access and Kaggle permissions."
-        ) from error
-
-    if not downloaded_path.exists():
-
-        raise FileNotFoundError(
-            f"KaggleHub returned a path that does not exist: "
-            f"{downloaded_path}"
-        )
-
-
-    # ========================================================
-    # 5. LOCATE THE DATASET ROOT
-    # ========================================================
-
-    def has_expected_structure(root):
-
-        return all(
-            (root / split / category).is_dir()
-            for split, category in EXPECTED_FOLDERS
-        )
-
-
-    def find_dataset_root(search_path):
-
-        search_path = Path(search_path)
-
-        # First check the returned directory itself.
-        if search_path.is_dir() and has_expected_structure(search_path):
-            return search_path
-
-        # Check a common nested folder.
-        nested = search_path / "RWF-2000"
-
-        if nested.is_dir() and has_expected_structure(nested):
-            return nested
-
-        # Search nested directories for the expected structure.
-        for train_folder in search_path.rglob("train"):
-
-            if not train_folder.is_dir():
-                continue
-
-            candidate = train_folder.parent
-
-            if has_expected_structure(candidate):
-                return candidate
-
-        return None
-
-
-    dataset_root = find_dataset_root(downloaded_path)
-
-
-    # ========================================================
-    # 6. HANDLE ZIP ARCHIVE IF REQUIRED
-    # ========================================================
-
-    if dataset_root is None:
-
-        print("\nExtracted directory not found.")
-        print("Searching for ZIP archive...")
-
-        zip_files = list(
-            downloaded_path.rglob("*.zip")
-        ) if downloaded_path.is_dir() else []
-
-        if downloaded_path.is_file() and downloaded_path.suffix.lower() == ".zip":
-            zip_files.append(downloaded_path)
-
-        if not zip_files:
-
-            raise FileNotFoundError(
-                "Could not locate the RWF-2000 folder structure "
-                "or a ZIP archive inside the KaggleHub result."
-            )
-
-        archive = zip_files[0]
-
-        print("ZIP archive found:", archive)
-
-        temporary_root = Path("/content/rwf2000_extraction")
-
-        if temporary_root.exists():
-            shutil.rmtree(temporary_root)
-
-        temporary_root.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-
-        print("\nExtracting ZIP archive...")
-
-        with ZipFile(
-            archive,
-            mode="r",
-            metadata_encoding="utf-8"
-        ) as zf:
-
-            for info in zf.infolist():
-
-                if info.is_dir():
-                    continue
-
-                parts = info.filename.split("/")
-
-                # Prevent unsafe paths and ignore unrelated files.
-                if (
-                    len(parts) < 4
-                    or parts[-3] not in ("train", "val")
-                    or parts[-2] not in ("Fight", "NonFight")
-                ):
-                    continue
-
-                split = parts[-3]
-                category = parts[-2]
-
-                original_name = Path(parts[-1])
-
-                if original_name.suffix.lower() not in VIDEO_EXTENSIONS:
-                    continue
-
-                destination_dir = (
-                    temporary_root / split / category
-                )
-
-                destination_dir.mkdir(
-                    parents=True,
-                    exist_ok=True
-                )
-
-                destination = (
-                    destination_dir / original_name.name
-                )
-
-                with zf.open(info, "r") as source:
-                    with destination.open("wb") as target:
-                        shutil.copyfileobj(source, target)
-
-        dataset_root = find_dataset_root(temporary_root)
-
-        if dataset_root is None:
-
-            # The temporary extraction already has train/val at root.
-            if has_expected_structure(temporary_root):
-                dataset_root = temporary_root
-
-            else:
-                raise RuntimeError(
-                    "ZIP extraction completed, but the expected "
-                    "RWF-2000 folder structure was not found."
-                )
-
-
-    # ========================================================
-    # 7. COPY INTO FINAL OUTPUT WITH SAFE FILENAMES
-    # ========================================================
-
-    print("\nDataset source:", dataset_root)
-    print("Preparing final dataset directory...")
-
-    if OUTPUT.exists():
-        shutil.rmtree(OUTPUT)
-
-    OUTPUT.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    counts = {
-        "train/Fight": 0,
-        "train/NonFight": 0,
-        "val/Fight": 0,
-        "val/NonFight": 0,
-    }
-
-    print("\nCopying videos into final directory...")
-
-    for split, category in EXPECTED_FOLDERS:
-
-        source_dir = dataset_root / split / category
-
-        destination_dir = OUTPUT / split / category
-
-        destination_dir.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-
-        videos = sorted([
-            file for file in source_dir.iterdir()
-            if file.is_file()
-            and file.suffix.lower() in VIDEO_EXTENSIONS
-        ])
-
-        for index, source_file in enumerate(videos, start=1):
-
-            extension = source_file.suffix.lower()
-
-            safe_name = (
-                f"{category.lower()}_{index:04d}{extension}"
-            )
-
-            destination_file = destination_dir / safe_name
-
-            shutil.copy2(
-                source_file,
-                destination_file
-            )
-
-            counts[f"{split}/{category}"] += 1
-
-        print(
-            f"{split}/{category}: "
-            f"{counts[f'{split}/{category}']} videos copied"
-        )
-
-
-    # ========================================================
-    # 8. VERIFY EXTRACTION
-    # ========================================================
-
-    print("\n" + "=" * 65)
-    print("RWF-2000 EXTRACTION REPORT")
-    print("=" * 65)
-
-    for key, count in counts.items():
-        print(f"{key}: {count} videos")
-
-    total = sum(counts.values())
-
-    print("\nTotal extracted videos:", total)
-
-    assert all(count > 0 for count in counts.values()), (
-        "One or more dataset folders are empty."
-    )
-
-    assert total == EXPECTED_TOTAL, (
-        f"Expected {EXPECTED_TOTAL} videos, "
-        f"but found {total}."
-    )
-
-
-# ============================================================
-# 9. FINAL VERIFICATION
-# ============================================================
-
-print("\n" + "=" * 65)
-print("FINAL DATASET VERIFICATION")
-print("=" * 65)
-
-final_total = 0
-
-for split, category in EXPECTED_FOLDERS:
-
-    folder = OUTPUT / split / category
-
-    assert folder.is_dir(), (
-        f"Missing directory: {folder}"
-    )
-
-    videos = [
-        file for file in folder.iterdir()
+def get_video_files(folder):
+    """Return video files inside a folder."""
+
+    if not folder.exists():
+        return []
+
+    return [
+        file
+        for file in folder.iterdir()
         if file.is_file()
         and file.suffix.lower() in VIDEO_EXTENSIONS
     ]
 
-    count = len(videos)
 
-    final_total += count
+def verify_dataset(dataset_dir):
+    """
+    Verify the expected RWF-2000 folder structure
+    and exact video counts.
+    """
 
-    print(f"{split}/{category}: {count} videos")
+    print("\nChecking dataset...")
 
+    actual_counts = {}
 
-assert final_total == EXPECTED_TOTAL, (
-    f"Expected {EXPECTED_TOTAL}, found {final_total}."
-)
+    for (split, category), expected in EXPECTED_COUNTS.items():
 
-assert dataset_is_ready(OUTPUT), (
-    "Final dataset verification failed."
-)
+        folder = dataset_dir / split / category
+
+        videos = get_video_files(folder)
+
+        actual_counts[(split, category)] = len(videos)
+
+        print(
+            f"{split}/{category}: "
+            f"{len(videos)} videos "
+            f"(expected: {expected})"
+        )
+
+    total = sum(actual_counts.values())
+
+    is_valid = (
+        actual_counts == EXPECTED_COUNTS
+        and total == TOTAL_EXPECTED
+    )
+
+    print(f"\nTotal videos: {total}/{TOTAL_EXPECTED}")
+
+    if is_valid:
+        print("Dataset verification successful.")
+
+    else:
+        print("Dataset verification failed.")
+
+    return is_valid
 
 
 # ============================================================
-# 10. SUCCESS
+# 3. SKIP IF DATASET IS ALREADY COMPLETE
 # ============================================================
 
-print("\n" + "=" * 65)
-print("RWF-2000 DATASET READY")
-print("=" * 65)
+if verify_dataset(OUTPUT_DIR):
 
-print("Dataset location:", OUTPUT)
-print("Total videos:", final_total)
-print("Storage: Colab local storage")
+    print("\nDataset already exists and is complete.")
+    print("Skipping download and extraction.")
 
-print("""
-Final directory:
+else:
 
-/content/RWF-2000/
-├── train/
-│   ├── Fight/
-│   └── NonFight/
-└── val/
-    ├── Fight/
-    └── NonFight/
-""")
+    print("\nDataset is missing or incomplete.")
+    print("Preparing dataset using the cached archive...")
 
-print("SUCCESS: Dataset download/extraction and verification completed.")
+
+    # ========================================================
+    # 4. CHECK ARCHIVE
+    # ========================================================
+
+    if ARCHIVE_PATH.exists():
+
+        print("\nExisting KaggleHub archive found:")
+        print(ARCHIVE_PATH)
+
+        print(
+            f"Archive size: "
+            f"{ARCHIVE_PATH.stat().st_size / (1024**3):.2f} GB"
+        )
+
+    else:
+
+        print("\nArchive not found.")
+        print("Downloading dataset through KaggleHub...")
+
+        try:
+            import kagglehub
+
+            try:
+                kagglehub.dataset_download(DATASET_NAME)
+
+            except Exception as error:
+                print(
+                    "\nKaggleHub automatic extraction failed:"
+                )
+                print(error)
+
+                print(
+                    "\nChecking whether the archive "
+                    "was downloaded successfully..."
+                )
+
+        except ImportError:
+            raise RuntimeError(
+                "KaggleHub is not installed. "
+                "Install it using: pip install kagglehub"
+            )
+
+        if not ARCHIVE_PATH.exists():
+
+            raise FileNotFoundError(
+                "Dataset archive was not found after download.\n"
+                f"Expected location: {ARCHIVE_PATH}"
+            )
+
+        print("\nArchive downloaded successfully.")
+
+
+    # ========================================================
+    # 5. VALIDATE ARCHIVE
+    # ========================================================
+
+    print("\nValidating archive...")
+
+    # IMPORTANT:
+    # is_zipfile() belongs to the zipfile module,
+    # not the ZipFile class.
+
+    assert zipfile.is_zipfile(ARCHIVE_PATH), (
+        "Downloaded archive is not a valid ZIP file."
+    )
+
+    print("Archive is a valid ZIP file.")
+
+
+    # ========================================================
+    # 6. INSPECT ARCHIVE CONTENTS
+    # ========================================================
+
+    print("\nInspecting archive contents...")
+
+    with ZipFile(ARCHIVE_PATH, "r") as archive:
+
+        video_entries = []
+
+        for info in archive.infolist():
+
+            if info.is_dir():
+                continue
+
+            path = Path(info.filename)
+
+            if path.suffix.lower() not in VIDEO_EXTENSIONS:
+                continue
+
+            parts = path.parts
+
+            # Expected:
+            # RWF-2000/train/Fight/video.avi
+
+            if len(parts) < 4:
+                continue
+
+            if parts[0] != "RWF-2000":
+                continue
+
+            split = parts[1]
+            category = parts[2]
+
+            if (split, category) not in EXPECTED_COUNTS:
+                continue
+
+            video_entries.append(
+                (info, split, category)
+            )
+
+        print(f"Video entries found: {len(video_entries)}")
+
+        assert len(video_entries) == TOTAL_EXPECTED, (
+            f"Expected {TOTAL_EXPECTED} videos, "
+            f"but found {len(video_entries)}."
+        )
+
+        archive_counts = Counter(
+            (split, category)
+            for _, split, category in video_entries
+        )
+
+        print("\nArchive distribution:")
+
+        for key, expected in EXPECTED_COUNTS.items():
+
+            actual = archive_counts[key]
+
+            print(
+                f"{key[0]}/{key[1]}: "
+                f"{actual}/{expected}"
+            )
+
+            assert actual == expected, (
+                f"Incorrect archive count for {key}: "
+                f"{actual}, expected {expected}"
+            )
+
+
+    # ========================================================
+    # 7. EXTRACT VIDEOS SAFELY TO TEMP DIRECTORY
+    # ========================================================
+
+    print("\nStarting safe extraction...")
+
+    # Remove only the temporary extraction directory.
+    # The KaggleHub archive is never deleted.
+
+    if TEMP_DIR.exists():
+        shutil.rmtree(TEMP_DIR)
+
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+    extracted_counts = Counter()
+
+    with ZipFile(ARCHIVE_PATH, "r") as archive:
+
+        video_entries = []
+
+        for info in archive.infolist():
+
+            if info.is_dir():
+                continue
+
+            path = Path(info.filename)
+
+            if path.suffix.lower() not in VIDEO_EXTENSIONS:
+                continue
+
+            parts = path.parts
+
+            if len(parts) < 4:
+                continue
+
+            if parts[0] != "RWF-2000":
+                continue
+
+            split = parts[1]
+            category = parts[2]
+
+            if (split, category) not in EXPECTED_COUNTS:
+                continue
+
+            video_entries.append(
+                (info, split, category)
+            )
+
+        for index, (info, split, category) in enumerate(
+            video_entries,
+            start=1
+        ):
+
+            extracted_counts[(split, category)] += 1
+
+            sequence = extracted_counts[(split, category)]
+
+            # Generate a safe filename instead of using
+            # the original potentially malformed filename.
+
+            if category == "Fight":
+                filename = f"fight_{sequence:04d}.avi"
+
+            else:
+                filename = f"nonfight_{sequence:04d}.avi"
+
+            output_folder = (
+                TEMP_DIR / split / category
+            )
+
+            output_folder.mkdir(
+                parents=True,
+                exist_ok=True
+            )
+
+            output_file = output_folder / filename
+
+            # Stream extraction to avoid loading large videos
+            # into memory.
+
+            with archive.open(info, "r") as source:
+                with open(output_file, "wb") as destination:
+
+                    shutil.copyfileobj(
+                        source,
+                        destination,
+                        length=1024 * 1024
+                    )
+
+            if index % 100 == 0:
+                print(
+                    f"Extracted {index}/"
+                    f"{TOTAL_EXPECTED} videos"
+                )
+
+    print("\nExtraction completed.")
+
+    # ========================================================
+    # 8. VERIFY TEMPORARY EXTRACTION
+    # ========================================================
+
+    print("\nVerifying temporary dataset...")
+
+    if not verify_dataset(TEMP_DIR):
+
+        raise RuntimeError(
+            "Temporary extraction verification failed. "
+            "The existing final dataset has not been replaced."
+        )
+
+
+    # ========================================================
+    # 9. REPLACE FINAL DATASET
+    # ========================================================
+
+    print("\nMoving verified dataset to final location...")
+
+    BACKUP_DIR = Path("/content/RWF-2000_incomplete_backup")
+
+    if BACKUP_DIR.exists():
+        shutil.rmtree(BACKUP_DIR)
+
+    if OUTPUT_DIR.exists():
+        OUTPUT_DIR.rename(BACKUP_DIR)
+
+    try:
+
+        TEMP_DIR.rename(OUTPUT_DIR)
+
+    except Exception:
+
+        # Restore the old dataset if replacement fails.
+
+        if BACKUP_DIR.exists() and not OUTPUT_DIR.exists():
+            BACKUP_DIR.rename(OUTPUT_DIR)
+
+        raise
+
+    # Delete the backup only after successful replacement.
+    if BACKUP_DIR.exists():
+        shutil.rmtree(BACKUP_DIR)
+
+
+    # ========================================================
+    # 10. FINAL VERIFICATION
+    # ========================================================
+
+    print("\nFinal dataset verification:")
+
+    if not verify_dataset(OUTPUT_DIR):
+
+        raise RuntimeError(
+            "Final dataset verification failed."
+        )
+
+    print("\n" + "=" * 55)
+    print("RWF-2000 DATASET PREPARATION COMPLETED")
+    print("=" * 55)
+
+    print(f"\nDataset location: {OUTPUT_DIR}")
+
+    print("\nFinal folder structure:")
+
+    for split in ["train", "val"]:
+
+        for category in ["Fight", "NonFight"]:
+
+            folder = OUTPUT_DIR / split / category
+
+            print(
+                f"{folder}: "
+                f"{len(get_video_files(folder))} videos"
+            )
+
+    print("\nTotal videos: 2000")
+    print("Dataset is ready for the next stage.")
